@@ -152,16 +152,36 @@ pub fn match_entities(
     if let Some(sim_fn) = similarity_fn {
         if !still_unmatched_before.is_empty() && !still_unmatched_after.is_empty() {
             const THRESHOLD: f64 = 0.8;
+            // Size ratio filter: pairs with very different content lengths can't reach 0.8 Jaccard
+            const SIZE_RATIO_CUTOFF: f64 = 0.5;
 
-            for after_entity in &still_unmatched_after {
+            // Pre-compute content lengths for O(1) size filtering
+            let before_lens: Vec<usize> = still_unmatched_before
+                .iter()
+                .map(|e| e.content.split_whitespace().count())
+                .collect();
+            let after_lens: Vec<usize> = still_unmatched_after
+                .iter()
+                .map(|e| e.content.split_whitespace().count())
+                .collect();
+
+            for (ai, after_entity) in still_unmatched_after.iter().enumerate() {
                 let mut best_match: Option<&SemanticEntity> = None;
                 let mut best_score: f64 = 0.0;
+                let a_len = after_lens[ai];
 
-                for before_entity in &still_unmatched_before {
+                for (bi, before_entity) in still_unmatched_before.iter().enumerate() {
                     if matched_before.contains(before_entity.id.as_str()) {
                         continue;
                     }
                     if before_entity.entity_type != after_entity.entity_type {
+                        continue;
+                    }
+
+                    // Early exit: skip pairs where token count ratio is too different
+                    let b_len = before_lens[bi];
+                    let (min_l, max_l) = if a_len < b_len { (a_len, b_len) } else { (b_len, a_len) };
+                    if max_l > 0 && (min_l as f64 / max_l as f64) < SIZE_RATIO_CUTOFF {
                         continue;
                     }
 
@@ -251,19 +271,24 @@ pub fn match_entities(
 
 /// Default content similarity using Jaccard index on whitespace-split tokens
 pub fn default_similarity(a: &SemanticEntity, b: &SemanticEntity) -> f64 {
+    let tokens_a: Vec<&str> = a.content.split_whitespace().collect();
+    let tokens_b: Vec<&str> = b.content.split_whitespace().collect();
+
     // Early rejection: if token counts differ too much, Jaccard can't reach 0.8
-    let a_count = a.content.split_whitespace().count();
-    let b_count = b.content.split_whitespace().count();
-    let (min_c, max_c) = if a_count < b_count { (a_count, b_count) } else { (b_count, a_count) };
+    let (min_c, max_c) = if tokens_a.len() < tokens_b.len() {
+        (tokens_a.len(), tokens_b.len())
+    } else {
+        (tokens_b.len(), tokens_a.len())
+    };
     if max_c > 0 && (min_c as f64 / max_c as f64) < 0.6 {
         return 0.0;
     }
 
-    let tokens_a: HashSet<&str> = a.content.split_whitespace().collect();
-    let tokens_b: HashSet<&str> = b.content.split_whitespace().collect();
+    let set_a: HashSet<&str> = tokens_a.into_iter().collect();
+    let set_b: HashSet<&str> = tokens_b.into_iter().collect();
 
-    let intersection_size = tokens_a.intersection(&tokens_b).count();
-    let union_size = tokens_a.union(&tokens_b).count();
+    let intersection_size = set_a.intersection(&set_b).count();
+    let union_size = set_a.union(&set_b).count();
 
     if union_size == 0 {
         return 0.0;

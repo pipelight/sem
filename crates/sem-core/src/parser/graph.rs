@@ -9,15 +9,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use rayon::prelude::*;
+use serde::Serialize;
 
 use crate::git::types::{FileChange, FileStatus};
 use crate::model::entity::SemanticEntity;
 use crate::parser::registry::ParserRegistry;
 
 /// A reference from one entity to another.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntityRef {
     pub from_entity: String,
     pub to_entity: String,
@@ -25,7 +28,8 @@ pub struct EntityRef {
 }
 
 /// Type of reference between entities.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RefType {
     /// Function/method call
     Calls,
@@ -49,7 +53,8 @@ pub struct EntityGraph {
 }
 
 /// Minimal entity info stored in the graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntityInfo {
     pub id: String,
     pub name: String,
@@ -537,39 +542,51 @@ fn extract_references_from_content<'a>(content: &'a str, own_name: &str) -> Vec<
     refs
 }
 
+static COMMON_LOCAL_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "result", "results", "data", "config", "value", "values",
+        "item", "items", "input", "output", "args", "opts",
+        "name", "path", "file", "line", "count", "index",
+        "temp", "prev", "next", "curr", "current", "node",
+        "left", "right", "root", "head", "tail", "body",
+        "text", "content", "source", "target", "entry",
+        "error", "errors", "message", "response", "request",
+        "context", "state", "props", "event", "handler",
+        "callback", "options", "params", "query", "list",
+        "base", "info", "meta", "kind", "mode", "flag",
+        "size", "length", "width", "height", "start", "stop",
+        "begin", "done", "found", "status", "code", "test",
+    ].into_iter().collect()
+});
+
 /// Names that are overwhelmingly local variables, not entity references.
 /// These create massive false-positive edges in the dependency graph.
 fn is_common_local_name(word: &str) -> bool {
-    matches!(
-        word,
-        "result" | "results" | "data" | "config" | "value" | "values"
-            | "item" | "items" | "input" | "output" | "args" | "opts"
-            | "name" | "path" | "file" | "line" | "count" | "index"
-            | "temp" | "prev" | "next" | "curr" | "current" | "node"
-            | "left" | "right" | "root" | "head" | "tail" | "body"
-            | "text" | "content" | "source" | "target" | "entry"
-            | "error" | "errors" | "message" | "response" | "request"
-            | "context" | "state" | "props" | "event" | "handler"
-            | "callback" | "options" | "params" | "query" | "list"
-            | "base" | "info" | "meta" | "kind" | "mode" | "flag"
-            | "size" | "length" | "width" | "height" | "start" | "stop"
-            | "begin" | "done" | "found" | "status" | "code" | "test"
-    )
+    COMMON_LOCAL_NAMES.contains(word)
 }
 
 /// Infer reference type from context using word-boundary-aware matching.
 fn infer_ref_type(content: &str, ref_name: &str) -> RefType {
-    // Check if it's a function call: ref_name followed by ( with word boundary before
-    let call_pattern = format!("{}(", ref_name);
-    if let Some(pos) = content.find(&call_pattern) {
-        // Verify word boundary: char before must not be alphanumeric or _
-        let is_boundary = pos == 0 || {
-            let prev = content.as_bytes()[pos - 1];
-            !prev.is_ascii_alphanumeric() && prev != b'_'
-        };
-        if is_boundary {
-            return RefType::Calls;
+    // Check if it's a function call: ref_name followed by ( with word boundary before.
+    // Avoids format! allocation by finding ref_name and checking the next char.
+    let bytes = content.as_bytes();
+    let name_bytes = ref_name.as_bytes();
+    let mut search_start = 0;
+    while let Some(rel_pos) = content[search_start..].find(ref_name) {
+        let pos = search_start + rel_pos;
+        let after = pos + name_bytes.len();
+        // Check next char is '('
+        if after < bytes.len() && bytes[after] == b'(' {
+            // Verify word boundary before
+            let is_boundary = pos == 0 || {
+                let prev = bytes[pos - 1];
+                !prev.is_ascii_alphanumeric() && prev != b'_'
+            };
+            if is_boundary {
+                return RefType::Calls;
+            }
         }
+        search_start = pos + 1;
     }
 
     // Check if it's in an import/use statement (line-level, not substring)
@@ -587,56 +604,59 @@ fn infer_ref_type(content: &str, ref_name: &str) -> RefType {
     RefType::TypeRef
 }
 
-fn is_keyword(word: &str) -> bool {
-    matches!(
-        word,
+static KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
         // Common across languages
-        "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "break"
-            | "continue" | "return" | "try" | "catch" | "finally" | "throw"
-            | "new" | "delete" | "typeof" | "instanceof" | "in" | "of"
-            | "true" | "false" | "null" | "undefined" | "void" | "this"
-            | "super" | "class" | "extends" | "implements" | "interface"
-            | "enum" | "const" | "let" | "var" | "function" | "async"
-            | "await" | "yield" | "import" | "export" | "default" | "from"
-            | "as" | "static" | "public" | "private" | "protected"
-            | "abstract" | "final" | "override"
-            // Rust
-            | "fn" | "pub" | "mod" | "use" | "struct" | "impl" | "trait"
-            | "where" | "type" | "self" | "Self" | "mut" | "ref" | "match"
-            | "loop" | "move" | "unsafe" | "extern" | "crate" | "dyn"
-            // Python
-            | "def" | "elif" | "except" | "raise" | "with"
-            | "pass" | "lambda" | "nonlocal" | "global" | "assert"
-            | "True" | "False" | "and" | "or" | "not" | "is"
-            // Go
-            | "func" | "package" | "range" | "select" | "chan" | "go"
-            | "defer" | "map" | "make" | "append" | "len" | "cap"
-            // C/C++
-            | "auto" | "register" | "volatile" | "sizeof" | "typedef"
-            | "template" | "typename" | "namespace" | "virtual" | "inline"
-            | "constexpr" | "nullptr" | "noexcept" | "explicit" | "friend"
-            | "operator" | "using" | "cout" | "endl" | "cerr" | "cin"
-            | "printf" | "scanf" | "malloc" | "free" | "NULL" | "include"
-            | "ifdef" | "ifndef" | "endif" | "define" | "pragma"
-            // Ruby
-            | "end" | "then" | "elsif" | "unless" | "until"
-            | "begin" | "rescue" | "ensure" | "when" | "require"
-            | "attr_accessor" | "attr_reader" | "attr_writer"
-            | "puts" | "nil" | "module" | "defined"
-            // C#
-            | "internal" | "sealed" | "readonly"
-            | "partial" | "delegate" | "event" | "params" | "out"
-            | "object" | "decimal" | "sbyte" | "ushort" | "uint"
-            | "ulong" | "nint" | "nuint" | "dynamic"
-            | "get" | "set" | "value" | "init" | "record"
-            // Types (primitives)
-            | "string" | "number" | "boolean" | "int" | "float" | "double"
-            | "bool" | "char" | "byte" | "i8" | "i16" | "i32" | "i64"
-            | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "usize"
-            | "isize" | "str" | "String" | "Vec" | "Option" | "Result"
-            | "Box" | "Arc" | "Rc" | "HashMap" | "HashSet" | "Some"
-            | "Ok" | "Err"
-    )
+        "if", "else", "for", "while", "do", "switch", "case", "break",
+        "continue", "return", "try", "catch", "finally", "throw",
+        "new", "delete", "typeof", "instanceof", "in", "of",
+        "true", "false", "null", "undefined", "void", "this",
+        "super", "class", "extends", "implements", "interface",
+        "enum", "const", "let", "var", "function", "async",
+        "await", "yield", "import", "export", "default", "from",
+        "as", "static", "public", "private", "protected",
+        "abstract", "final", "override",
+        // Rust
+        "fn", "pub", "mod", "use", "struct", "impl", "trait",
+        "where", "type", "self", "Self", "mut", "ref", "match",
+        "loop", "move", "unsafe", "extern", "crate", "dyn",
+        // Python
+        "def", "elif", "except", "raise", "with",
+        "pass", "lambda", "nonlocal", "global", "assert",
+        "True", "False", "and", "or", "not", "is",
+        // Go
+        "func", "package", "range", "select", "chan", "go",
+        "defer", "map", "make", "append", "len", "cap",
+        // C/C++
+        "auto", "register", "volatile", "sizeof", "typedef",
+        "template", "typename", "namespace", "virtual", "inline",
+        "constexpr", "nullptr", "noexcept", "explicit", "friend",
+        "operator", "using", "cout", "endl", "cerr", "cin",
+        "printf", "scanf", "malloc", "free", "NULL", "include",
+        "ifdef", "ifndef", "endif", "define", "pragma",
+        // Ruby
+        "end", "then", "elsif", "unless", "until",
+        "begin", "rescue", "ensure", "when", "require",
+        "attr_accessor", "attr_reader", "attr_writer",
+        "puts", "nil", "module", "defined",
+        // C#
+        "internal", "sealed", "readonly",
+        "partial", "delegate", "event", "params", "out",
+        "object", "decimal", "sbyte", "ushort", "uint",
+        "ulong", "nint", "nuint", "dynamic",
+        "get", "set", "value", "init", "record",
+        // Types (primitives)
+        "string", "number", "boolean", "int", "float", "double",
+        "bool", "char", "byte", "i8", "i16", "i32", "i64",
+        "u8", "u16", "u32", "u64", "f32", "f64", "usize",
+        "isize", "str", "String", "Vec", "Option", "Result",
+        "Box", "Arc", "Rc", "HashMap", "HashSet", "Some",
+        "Ok", "Err",
+    ].into_iter().collect()
+});
+
+fn is_keyword(word: &str) -> bool {
+    KEYWORDS.contains(word)
 }
 
 #[cfg(test)]

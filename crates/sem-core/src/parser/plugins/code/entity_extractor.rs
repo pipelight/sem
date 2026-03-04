@@ -39,13 +39,14 @@ fn visit_node(
             } else {
                 map_node_type(node_type)
             };
-            let content = node_text(node, source);
+            let content_str = node_text(node, source);
+            let content = content_str.to_string();
 
             let struct_hash = structural_hash(node, source);
             let entity = SemanticEntity {
-                id: build_entity_id(file_path, &entity_type, &name, parent_id),
+                id: build_entity_id(file_path, entity_type, &name, parent_id),
                 file_path: file_path.to_string(),
-                entity_type: entity_type.clone(),
+                entity_type: entity_type.to_string(),
                 name: name.clone(),
                 parent_id: parent_id.map(String::from),
                 content_hash: content_hash(&content),
@@ -98,7 +99,7 @@ fn visit_node(
 fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     // Try 'name' field first (works for most languages)
     if let Some(name_node) = node.child_by_field_name("name") {
-        return Some(node_text(name_node, source));
+        return Some(node_text(name_node, source).to_string());
     }
 
     // For variable/lexical declarations, try to get the declarator name
@@ -108,7 +109,7 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
         for child in node.named_children(&mut cursor) {
             if child.kind() == "variable_declarator" {
                 if let Some(decl_name) = child.child_by_field_name("name") {
-                    return Some(node_text(decl_name, source));
+                    return Some(node_text(decl_name, source).to_string());
                 }
             }
         }
@@ -120,7 +121,7 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
         for child in node.named_children(&mut cursor) {
             if child.kind() == "function_definition" || child.kind() == "class_definition" {
                 if let Some(inner_name) = child.child_by_field_name("name") {
-                    return Some(node_text(inner_name, source));
+                    return Some(node_text(inner_name, source).to_string());
                 }
             }
         }
@@ -141,7 +142,7 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
             if kind != "template_parameter_list" {
                 // The inner declaration (class, function, etc.)
                 if let Some(name) = child.child_by_field_name("name") {
-                    return Some(node_text(name, source));
+                    return Some(node_text(name, source).to_string());
                 }
                 if let Some(declarator) = child.child_by_field_name("declarator") {
                     return extract_declarator_name(declarator, source);
@@ -153,21 +154,21 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     // For C++ namespace_definition
     if node_type == "namespace_definition" {
         if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source));
+            return Some(node_text(name_node, source).to_string());
         }
     }
 
     // For C++ class_specifier
     if node_type == "class_specifier" {
         if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source));
+            return Some(node_text(name_node, source).to_string());
         }
     }
 
     // For C# property_declaration, namespace_declaration, struct_declaration
     if node_type == "property_declaration" || node_type == "namespace_declaration" || node_type == "struct_declaration" {
         if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source));
+            return Some(node_text(name_node, source).to_string());
         }
     }
 
@@ -182,7 +183,7 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     // For C struct/enum/union specifiers, try the 'name' field
     if node_type == "struct_specifier" || node_type == "enum_specifier" || node_type == "union_specifier" {
         if let Some(name_node) = node.child_by_field_name("name") {
-            return Some(node_text(name_node, source));
+            return Some(node_text(name_node, source).to_string());
         }
     }
 
@@ -197,7 +198,7 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            return Some(node_text(child, source));
+            return Some(node_text(child, source).to_string());
         }
     }
 
@@ -207,10 +208,10 @@ fn extract_name(node: Node, source: &[u8]) -> Option<String> {
 /// Extract the name from a C declarator (handles pointer_declarator, function_declarator, etc.)
 fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "type_identifier" | "field_identifier" => Some(node_text(node, source)),
+        "identifier" | "type_identifier" | "field_identifier" => Some(node_text(node, source).to_string()),
         "qualified_identifier" | "scoped_identifier" => {
             // For C++ qualified names like ClassName::method, return the full qualified name
-            Some(node_text(node, source))
+            Some(node_text(node, source).to_string())
         }
         "pointer_declarator" | "function_declarator" | "array_declarator" | "parenthesized_declarator" => {
             if let Some(inner) = node.child_by_field_name("declarator") {
@@ -219,28 +220,28 @@ fn extract_declarator_name(node: Node, source: &[u8]) -> Option<String> {
                 let mut cursor = node.walk();
                 let result = node.named_children(&mut cursor)
                     .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                    .map(|c| node_text(c, source));
+                    .map(|c| node_text(c, source).to_string());
                 result
             }
         }
         _ => {
             if let Some(name) = node.child_by_field_name("name") {
-                return Some(node_text(name, source));
+                return Some(node_text(name, source).to_string());
             }
             let mut cursor = node.walk();
             let result = node.named_children(&mut cursor)
                 .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                .map(|c| node_text(c, source));
+                .map(|c| node_text(c, source).to_string());
             result
         }
     }
 }
 
-fn node_text(node: Node, source: &[u8]) -> String {
-    node.utf8_text(source).unwrap_or("").to_string()
+fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
+    node.utf8_text(source).unwrap_or("")
 }
 
-fn map_node_type(tree_sitter_type: &str) -> String {
+fn map_node_type<'a>(tree_sitter_type: &'a str) -> &'a str {
     match tree_sitter_type {
         "function_declaration" | "function_definition" | "function_item" => "function",
         "method_declaration" | "method_definition" | "method" | "singleton_method" => "method",
@@ -257,26 +258,25 @@ fn map_node_type(tree_sitter_type: &str) -> String {
         "lexical_declaration" | "variable_declaration" | "var_declaration" | "declaration" => "variable",
         "const_declaration" | "const_item" => "constant",
         "static_item" => "static",
-        "decorated_definition" => "decorated_definition", // resolved by map_decorated_type
+        "decorated_definition" => "decorated_definition",
         "constructor_declaration" => "constructor",
         "field_declaration" | "public_field_definition" | "field_definition" => "field",
         "property_declaration" => "property",
         "annotation_type_declaration" => "annotation",
         "template_declaration" => "template",
-        other => return other.to_string(),
+        other => other,
     }
-    .to_string()
 }
 
 /// For Python decorated_definition, check the inner node to determine the real type.
-fn map_decorated_type(node: Node) -> String {
+fn map_decorated_type(node: Node) -> &'static str {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "class_definition" => return "class".to_string(),
-            "function_definition" => return "function".to_string(),
+            "class_definition" => return "class",
+            "function_definition" => return "function",
             _ => {}
         }
     }
-    "function".to_string()
+    "function"
 }
