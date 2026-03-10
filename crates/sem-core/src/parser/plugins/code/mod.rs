@@ -425,6 +425,33 @@ function outer() {
     }
 
     #[test]
+    fn test_renamed_function_same_structural_hash() {
+        let code_a = "def get_card():\n    return db.query('cards')\n";
+        let code_b = "def get_card_1():\n    return db.query('cards')\n";
+
+        let plugin = CodeParserPlugin;
+        let entities_a = plugin.extract_entities(code_a, "a.py");
+        let entities_b = plugin.extract_entities(code_b, "b.py");
+
+        assert_eq!(entities_a.len(), 1, "Should find one entity in a");
+        assert_eq!(entities_b.len(), 1, "Should find one entity in b");
+        assert_eq!(entities_a[0].name, "get_card");
+        assert_eq!(entities_b[0].name, "get_card_1");
+
+        // Structural hash should match since only the name differs
+        assert_eq!(
+            entities_a[0].structural_hash, entities_b[0].structural_hash,
+            "Renamed function with identical body should have same structural_hash"
+        );
+
+        // Content hash should differ (it includes the name)
+        assert_ne!(
+            entities_a[0].content_hash, entities_b[0].content_hash,
+            "Content hash should differ since raw content includes the name"
+        );
+    }
+
+    #[test]
     fn test_hcl_entity_extraction() {
         let code = r#"
 region = "eu-west-1"

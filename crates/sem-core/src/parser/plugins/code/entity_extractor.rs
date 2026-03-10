@@ -1,7 +1,7 @@
 use tree_sitter::{Node, Tree};
 
 use crate::model::entity::{build_entity_id, SemanticEntity};
-use crate::utils::hash::{content_hash, structural_hash};
+use crate::utils::hash::{content_hash, structural_hash, structural_hash_excluding_range};
 use super::languages::LanguageConfig;
 
 pub fn extract_entities(
@@ -39,7 +39,7 @@ fn visit_node(
         if let Some((name, entity_type)) = extract_call_entity(node, config, source) {
             let content_str = node_text(node, source);
             let content = content_str.to_string();
-            let struct_hash = structural_hash(node, source);
+            let struct_hash = compute_structural_hash(node, source);
             let entity = SemanticEntity {
                 id: build_entity_id(file_path, entity_type, &name, parent_id),
                 file_path: file_path.to_string(),
@@ -92,7 +92,7 @@ fn visit_node(
                 let content_str = node_text(node, source);
                 let content = content_str.to_string();
 
-                let struct_hash = structural_hash(node, source);
+                let struct_hash = compute_structural_hash(node, source);
                 let entity = SemanticEntity {
                     id: build_entity_id(file_path, entity_type, &name, parent_id),
                     file_path: file_path.to_string(),
@@ -154,6 +154,125 @@ fn visit_node(
             source,
             enclosing_entity_node_type,
         );
+    }
+}
+
+/// Compute the structural hash for an entity, excluding the name token so that
+/// renames of otherwise identical entities produce the same hash.
+fn compute_structural_hash(node: Node, source: &[u8]) -> String {
+    match find_name_byte_range(node, source) {
+        Some((start, end)) => structural_hash_excluding_range(node, source, start, end),
+        None => structural_hash(node, source),
+    }
+}
+
+/// Find the byte range of the name node, mirroring extract_name() logic.
+/// Returns (start_byte, end_byte) of the name token to exclude from hashing.
+fn find_name_byte_range(node: Node, _source: &[u8]) -> Option<(usize, usize)> {
+    // Try 'name' field first (works for most languages)
+    if let Some(name_node) = node.child_by_field_name("name") {
+        return Some((name_node.start_byte(), name_node.end_byte()));
+    }
+
+    let node_type = node.kind();
+
+    // Variable/lexical declarations: name is inside variable_declarator
+    if node_type == "lexical_declaration" || node_type == "variable_declaration" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "variable_declarator" {
+                if let Some(decl_name) = child.child_by_field_name("name") {
+                    return Some((decl_name.start_byte(), decl_name.end_byte()));
+                }
+            }
+        }
+    }
+
+    // Decorated definitions (Python): look at the inner definition
+    if node_type == "decorated_definition" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "function_definition" || child.kind() == "class_definition" {
+                if let Some(inner_name) = child.child_by_field_name("name") {
+                    return Some((inner_name.start_byte(), inner_name.end_byte()));
+                }
+            }
+        }
+    }
+
+    // C/C++ function_definition: name is inside declarator
+    if node_type == "function_definition" {
+        if let Some(declarator) = node.child_by_field_name("declarator") {
+            return find_declarator_name_range(declarator);
+        }
+    }
+
+    // C++ template_declaration
+    if node_type == "template_declaration" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() != "template_parameter_list" {
+                if let Some(name) = child.child_by_field_name("name") {
+                    return Some((name.start_byte(), name.end_byte()));
+                }
+                if let Some(declarator) = child.child_by_field_name("declarator") {
+                    return find_declarator_name_range(declarator);
+                }
+            }
+        }
+    }
+
+    // C declarations
+    if node_type == "declaration" || node_type == "type_definition" {
+        if let Some(declarator) = node.child_by_field_name("declarator") {
+            return find_declarator_name_range(declarator);
+        }
+    }
+
+    // Fallback: first identifier child
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "identifier" || child.kind() == "type_identifier" {
+            return Some((child.start_byte(), child.end_byte()));
+        }
+    }
+
+    None
+}
+
+/// Find the byte range of the name within a C-style declarator chain.
+fn find_declarator_name_range(node: Node) -> Option<(usize, usize)> {
+    match node.kind() {
+        "identifier" | "type_identifier" | "field_identifier" => {
+            Some((node.start_byte(), node.end_byte()))
+        }
+        "qualified_identifier" | "scoped_identifier" => {
+            Some((node.start_byte(), node.end_byte()))
+        }
+        "pointer_declarator" | "function_declarator" | "array_declarator"
+        | "parenthesized_declarator" => {
+            if let Some(inner) = node.child_by_field_name("declarator") {
+                find_declarator_name_range(inner)
+            } else {
+                let mut cursor = node.walk();
+                let result = node
+                    .named_children(&mut cursor)
+                    .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                    .map(|c| (c.start_byte(), c.end_byte()));
+                result
+            }
+        }
+        _ => {
+            if let Some(name) = node.child_by_field_name("name") {
+                return Some((name.start_byte(), name.end_byte()));
+            }
+            let mut cursor = node.walk();
+            let result = node
+                .named_children(&mut cursor)
+                .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                .map(|c| (c.start_byte(), c.end_byte()));
+            result
+        }
     }
 }
 
