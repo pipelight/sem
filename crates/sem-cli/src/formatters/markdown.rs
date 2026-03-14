@@ -59,7 +59,9 @@ pub fn format_markdown(result: &DiffResult) -> String {
                             post_table.push(format!("- {}", line.trim()));
                         }
                         for line in &after_lines {
-                            post_table.push(format!("+ {}", line.trim()));
+                        post_table.push(String::new());
+                        post_table.push(format!("**`{}`**", change.entity_name));
+                        post_table.push("```diff".to_string());
                         }
                         post_table.push("```".to_string());
                     }
