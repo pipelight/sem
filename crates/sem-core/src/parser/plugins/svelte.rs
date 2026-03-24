@@ -149,11 +149,6 @@ enum SvelteEntityKind {
     BoundaryElement,
     OptionsElement,
     TitleElement,
-    RenderTag,
-    HtmlTag,
-    ConstTag,
-    DebugTag,
-    ExpressionTag,
 }
 
 impl fmt::Display for SvelteEntityKind {
@@ -189,11 +184,6 @@ impl SvelteEntityKind {
             Self::BoundaryElement => "svelte_boundary",
             Self::OptionsElement => "svelte_options",
             Self::TitleElement => "svelte_title_element",
-            Self::RenderTag => "svelte_render_tag",
-            Self::HtmlTag => "svelte_html_tag",
-            Self::ConstTag => "svelte_const_tag",
-            Self::DebugTag => "svelte_debug_tag",
-            Self::ExpressionTag => "svelte_expression_tag",
         }
     }
 
@@ -223,61 +213,14 @@ impl SvelteEntityKind {
             Self::BoundaryElement => "boundary",
             Self::OptionsElement => "options",
             Self::TitleElement => "title_element",
-            Self::RenderTag => "render",
-            Self::HtmlTag => "html",
-            Self::ConstTag => "const",
-            Self::DebugTag => "debug",
-            Self::ExpressionTag => "expression",
         }
     }
-}
-
-struct SvelteEntity {
-    file_path: String,
-    entity_type: String,
-    name: String,
-    parent_id: Option<String>,
-    content: String,
-    structural_hash: Option<String>,
-    start_line: usize,
-    end_line: usize,
-    metadata: Option<HashMap<String, String>>,
-}
-
-struct EntitySpan {
-    start: usize,
-    end: usize,
-    start_line: usize,
-    end_line: usize,
 }
 
 struct ReparentContext<'a> {
     file_path: &'a str,
     parent_id: &'a str,
     start_line_offset: usize,
-}
-
-impl From<SvelteEntity> for SemanticEntity {
-    fn from(value: SvelteEntity) -> Self {
-        SemanticEntity {
-            id: build_entity_id(
-                &value.file_path,
-                &value.entity_type,
-                &value.name,
-                value.parent_id.as_deref(),
-            ),
-            file_path: value.file_path,
-            entity_type: value.entity_type,
-            name: value.name,
-            parent_id: value.parent_id,
-            content_hash: content_hash(&value.content),
-            structural_hash: value.structural_hash,
-            content: value.content,
-            start_line: value.start_line,
-            end_line: value.end_line,
-            metadata: value.metadata,
-        }
-    }
 }
 
 struct SvelteLowerer<'a> {
@@ -355,13 +298,12 @@ impl<'a> SvelteLowerer<'a> {
             SVELTE_LANG_KEY.to_string(),
             lang.metadata_value().to_string(),
         );
-        let span = self.node_span(node);
 
         let entity = self.make_entity(
             kind,
             name,
             None,
-            span,
+            node,
             Some(structural_hash(node, self.source_bytes)),
             Some(metadata),
         );
@@ -390,12 +332,11 @@ impl<'a> SvelteLowerer<'a> {
     }
 
     fn lower_style(&mut self, node: TsNode<'_>, name: String) {
-        let span = self.node_span(node);
         let entity = self.make_entity(
             SvelteEntityKind::Style,
             name,
             None,
-            span,
+            node,
             Some(structural_hash(node, self.source_bytes)),
             Some(base_metadata(SvelteEntityKind::Style)),
         );
@@ -417,16 +358,14 @@ impl<'a> SvelteLowerer<'a> {
 
         let first = *nodes.first()?;
         let last = *nodes.last()?;
-        let entity = self.make_entity(
+        let entity = self.make_ranged_entity(
             SvelteEntityKind::Fragment,
             name.to_string(),
             parent_id,
-            EntitySpan {
-                start: first.start_byte(),
-                end: last.end_byte(),
-                start_line: self.node_start_line(first),
-                end_line: self.node_end_line(last),
-            },
+            first.start_byte(),
+            last.end_byte(),
+            self.node_start_line(first),
+            self.node_end_line(last),
             self.fragment_structural_hash(nodes),
             Some(base_metadata(SvelteEntityKind::Fragment)),
         );
@@ -470,46 +409,6 @@ impl<'a> SvelteLowerer<'a> {
             "await_block" => self.lower_await_block(node, parent_id),
             "snippet_block" => self.lower_snippet_block(node, parent_id),
             "element" => self.lower_element(node, parent_id),
-            "render_tag" => {
-                self.push_node_entity(
-                    SvelteEntityKind::RenderTag,
-                    self.line_named("render", node),
-                    parent_id,
-                    node,
-                );
-            }
-            "html_tag" => {
-                self.push_node_entity(
-                    SvelteEntityKind::HtmlTag,
-                    self.line_named("html", node),
-                    parent_id,
-                    node,
-                );
-            }
-            "const_tag" => {
-                self.push_node_entity(
-                    SvelteEntityKind::ConstTag,
-                    self.line_named("const", node),
-                    parent_id,
-                    node,
-                );
-            }
-            "debug_tag" => {
-                self.push_node_entity(
-                    SvelteEntityKind::DebugTag,
-                    self.line_named("debug", node),
-                    parent_id,
-                    node,
-                );
-            }
-            "expression" => {
-                self.push_node_entity(
-                    SvelteEntityKind::ExpressionTag,
-                    self.line_named("expression", node),
-                    parent_id,
-                    node,
-                );
-            }
             _ => {}
         }
     }
@@ -546,12 +445,11 @@ impl<'a> SvelteLowerer<'a> {
         parent_id: &str,
     ) {
         if let Some((first, rest)) = clauses.split_first() {
-            let span = self.node_span(*first);
             let entity = self.make_entity(
                 SvelteEntityKind::IfBlock,
                 self.line_named("if", *first),
                 Some(parent_id.to_string()),
-                span,
+                *first,
                 Some(structural_hash(*first, self.source_bytes)),
                 Some(base_metadata(SvelteEntityKind::IfBlock)),
             );
@@ -587,13 +485,7 @@ impl<'a> SvelteLowerer<'a> {
     }
 
     fn lower_key_block(&mut self, node: TsNode<'_>, parent_id: &str) {
-        let id = self.push_node_entity(
-            SvelteEntityKind::KeyBlock,
-            self.line_named("key", node),
-            parent_id,
-            node,
-        );
-        self.lower_markup_children(node, &id);
+        self.lower_container_node(SvelteEntityKind::KeyBlock, "key", node, parent_id);
     }
 
     fn lower_await_block(&mut self, node: TsNode<'_>, parent_id: &str) {
@@ -623,13 +515,7 @@ impl<'a> SvelteLowerer<'a> {
     }
 
     fn lower_snippet_block(&mut self, node: TsNode<'_>, parent_id: &str) {
-        let id = self.push_node_entity(
-            SvelteEntityKind::Snippet,
-            self.line_named("snippet", node),
-            parent_id,
-            node,
-        );
-        self.lower_markup_children(node, &id);
+        self.lower_container_node(SvelteEntityKind::Snippet, "snippet", node, parent_id);
     }
 
     fn lower_element(&mut self, node: TsNode<'_>, parent_id: &str) {
@@ -640,17 +526,8 @@ impl<'a> SvelteLowerer<'a> {
         match classify_element_kind(tag_name) {
             ElementLowering::Ignore => self.lower_markup_children(node, parent_id),
             ElementLowering::Kind(kind) => {
-                let metadata = match kind {
-                    SvelteEntityKind::OptionsElement => Some(self.options_metadata(node)),
-                    _ => Some(base_metadata(kind)),
-                };
-                let id = self.push_node_entity_with_metadata(
-                    kind,
-                    self.line_named(tag_name, node),
-                    parent_id,
-                    node,
-                    metadata,
-                );
+                let id =
+                    self.push_node_entity(kind, self.line_named(tag_name, node), parent_id, node);
                 self.lower_markup_children(node, &id);
             }
         }
@@ -663,29 +540,28 @@ impl<'a> SvelteLowerer<'a> {
         parent_id: &str,
         node: TsNode<'_>,
     ) -> String {
-        self.push_node_entity_with_metadata(kind, name, parent_id, node, Some(base_metadata(kind)))
-    }
-
-    fn push_node_entity_with_metadata(
-        &mut self,
-        kind: SvelteEntityKind,
-        name: String,
-        parent_id: &str,
-        node: TsNode<'_>,
-        metadata: Option<HashMap<String, String>>,
-    ) -> String {
-        let span = self.node_span(node);
         let entity = self.make_entity(
             kind,
             name,
             Some(parent_id.to_string()),
-            span,
+            node,
             Some(structural_hash(node, self.source_bytes)),
-            metadata,
+            Some(base_metadata(kind)),
         );
         let id = entity.id.clone();
         self.entities.push(entity);
         id
+    }
+
+    fn lower_container_node(
+        &mut self,
+        kind: SvelteEntityKind,
+        label: &'static str,
+        node: TsNode<'_>,
+        parent_id: &str,
+    ) {
+        let id = self.push_node_entity(kind, self.line_named(label, node), parent_id, node);
+        self.lower_markup_children(node, &id);
     }
 
     fn make_entity(
@@ -693,30 +569,49 @@ impl<'a> SvelteLowerer<'a> {
         kind: SvelteEntityKind,
         name: String,
         parent_id: Option<String>,
-        span: EntitySpan,
+        node: TsNode<'_>,
         structural_hash: Option<String>,
         metadata: Option<HashMap<String, String>>,
     ) -> SemanticEntity {
-        SvelteEntity {
-            file_path: self.file_path.to_string(),
-            entity_type: kind.as_str().to_string(),
+        self.make_ranged_entity(
+            kind,
             name,
             parent_id,
-            content: text_for_byte_range(self.source, span.start, span.end).to_string(),
+            node.start_byte(),
+            node.end_byte(),
+            self.node_start_line(node),
+            self.node_end_line(node),
             structural_hash,
-            start_line: span.start_line,
-            end_line: span.end_line,
             metadata,
-        }
-        .into()
+        )
     }
 
-    fn node_span(&self, node: TsNode<'_>) -> EntitySpan {
-        EntitySpan {
-            start: node.start_byte(),
-            end: node.end_byte(),
-            start_line: self.node_start_line(node),
-            end_line: self.node_end_line(node),
+    fn make_ranged_entity(
+        &self,
+        kind: SvelteEntityKind,
+        name: String,
+        parent_id: Option<String>,
+        start: usize,
+        end: usize,
+        start_line: usize,
+        end_line: usize,
+        structural_hash: Option<String>,
+        metadata: Option<HashMap<String, String>>,
+    ) -> SemanticEntity {
+        let entity_type = kind.as_str().to_string();
+        let content = text_for_byte_range(self.source, start, end).to_string();
+        SemanticEntity {
+            id: build_entity_id(self.file_path, &entity_type, &name, parent_id.as_deref()),
+            file_path: self.file_path.to_string(),
+            entity_type,
+            name,
+            parent_id,
+            content_hash: content_hash(&content),
+            structural_hash,
+            content,
+            start_line,
+            end_line,
+            metadata,
         }
     }
 
@@ -827,35 +722,6 @@ impl<'a> SvelteLowerer<'a> {
             _ => TopLevelNodeKind::Other,
         }
     }
-
-    fn options_metadata(&self, node: TsNode<'_>) -> HashMap<String, String> {
-        let mut metadata = base_metadata(SvelteEntityKind::OptionsElement);
-        let Some(tag) = element_tag_node(node) else {
-            return metadata;
-        };
-
-        let mut cursor = tag.walk();
-        for child in tag.named_children(&mut cursor) {
-            if child.kind() != "attribute" {
-                continue;
-            }
-
-            let Some(name_node) = child.child_by_field_name("name") else {
-                continue;
-            };
-            let Some(name) = text_for_node(self.source, name_node) else {
-                continue;
-            };
-
-            let value = child
-                .child_by_field_name("value")
-                .and_then(|value_node| options_attribute_value(value_node, self.source))
-                .unwrap_or("true");
-            metadata.insert(format!("svelte.options.{name}"), value.to_string());
-        }
-
-        metadata
-    }
 }
 
 fn extract_svelte_module_entities(
@@ -869,18 +735,20 @@ fn extract_svelte_module_entities(
         lang.metadata_value().to_string(),
     );
 
-    let module_entity: SemanticEntity = SvelteEntity {
+    let entity_type = SvelteEntityKind::ModuleFile.as_str().to_string();
+    let module_entity = SemanticEntity {
+        id: build_entity_id(file_path, &entity_type, "module", None),
         file_path: file_path.to_string(),
-        entity_type: SvelteEntityKind::ModuleFile.as_str().to_string(),
+        entity_type,
         name: "module".to_string(),
         parent_id: None,
-        content: content.to_string(),
+        content_hash: content_hash(content),
         structural_hash: None,
+        content: content.to_string(),
         start_line: 1,
         end_line: last_line_number(content),
         metadata: Some(metadata),
-    }
-    .into();
+    };
 
     let module_id = module_entity.id.clone();
     let code_plugin = CodeParserPlugin;
@@ -951,17 +819,7 @@ fn is_component_tag(tag_name: &str) -> bool {
 fn is_semantic_child(node: TsNode<'_>) -> bool {
     matches!(
         node.kind(),
-        "if_block"
-            | "each_block"
-            | "await_block"
-            | "key_block"
-            | "snippet_block"
-            | "element"
-            | "render_tag"
-            | "html_tag"
-            | "const_tag"
-            | "debug_tag"
-            | "expression"
+        "if_block" | "each_block" | "await_block" | "key_block" | "snippet_block" | "element"
     )
 }
 
@@ -1033,36 +891,6 @@ fn simple_attribute_value<'a>(node: TsNode<'_>, source: &'a str) -> Option<&'a s
         }
         _ => None,
     }
-}
-
-fn options_attribute_value<'a>(node: TsNode<'_>, source: &'a str) -> Option<&'a str> {
-    match node.kind() {
-        "expression" => text_for_node(source, node).map(normalize_option_expression_value),
-        _ => simple_attribute_value(node, source).or_else(|| text_for_node(source, node)),
-    }
-}
-
-fn normalize_option_expression_value(value: &str) -> &str {
-    let trimmed = value.trim();
-    let inner = strip_wrapping_pair(trimmed, '{', '}')
-        .unwrap_or(trimmed)
-        .trim();
-    strip_wrapping_quotes(inner).unwrap_or(inner)
-}
-
-fn strip_wrapping_pair(value: &str, open: char, close: char) -> Option<&str> {
-    if value.starts_with(open)
-        && value.ends_with(close)
-        && value.len() >= open.len_utf8() + close.len_utf8()
-    {
-        Some(&value[open.len_utf8()..value.len() - close.len_utf8()])
-    } else {
-        None
-    }
-}
-
-fn strip_wrapping_quotes(value: &str) -> Option<&str> {
-    strip_wrapping_pair(value, '\'', '\'').or_else(|| strip_wrapping_pair(value, '"', '"'))
 }
 
 fn text_for_node<'a>(source: &'a str, node: TsNode<'_>) -> Option<&'a str> {
@@ -1341,77 +1169,46 @@ function hello() {
     }
 
     #[test]
-    fn test_svelte_tag_comment_is_non_structural() {
+    fn test_svelte_tag_comments_are_non_structural() {
         let before = r#"<div class="app"></div>"#;
-        let after = r#"<div // Svelte 5 tag comment
-class="app"></div>"#;
         let plugin = SvelteParserPlugin;
-        let before_entities = plugin.extract_entities(before, "Commented.svelte");
-        let after_entities = plugin.extract_entities(after, "Commented.svelte");
 
-        let before_div = before_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_element")
-            .unwrap();
-        let after_div = after_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_element")
-            .unwrap();
+        for after in [
+            r#"<div // Svelte 5 tag comment
+class="app"></div>"#,
+            r#"<div /* Svelte 5 tag comment */
+class="app"></div>"#,
+        ] {
+            let before_entities = plugin.extract_entities(before, "Commented.svelte");
+            let after_entities = plugin.extract_entities(after, "Commented.svelte");
 
-        assert_ne!(before_div.content_hash, after_div.content_hash);
-        assert_eq!(before_div.structural_hash, after_div.structural_hash);
+            let before_div = before_entities
+                .iter()
+                .find(|entity| entity.entity_type == "svelte_element")
+                .unwrap();
+            let after_div = after_entities
+                .iter()
+                .find(|entity| entity.entity_type == "svelte_element")
+                .unwrap();
 
-        let before_fragment = before_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_fragment")
-            .unwrap();
-        let after_fragment = after_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_fragment")
-            .unwrap();
+            assert_ne!(before_div.content_hash, after_div.content_hash);
+            assert_eq!(before_div.structural_hash, after_div.structural_hash);
 
-        assert_ne!(before_fragment.content_hash, after_fragment.content_hash);
-        assert_eq!(
-            before_fragment.structural_hash,
-            after_fragment.structural_hash
-        );
-    }
+            let before_fragment = before_entities
+                .iter()
+                .find(|entity| entity.entity_type == "svelte_fragment")
+                .unwrap();
+            let after_fragment = after_entities
+                .iter()
+                .find(|entity| entity.entity_type == "svelte_fragment")
+                .unwrap();
 
-    #[test]
-    fn test_svelte_block_tag_comment_is_non_structural() {
-        let before = r#"<div class="app"></div>"#;
-        let after = r#"<div /* Svelte 5 tag comment */
-class="app"></div>"#;
-        let plugin = SvelteParserPlugin;
-        let before_entities = plugin.extract_entities(before, "Commented.svelte");
-        let after_entities = plugin.extract_entities(after, "Commented.svelte");
-
-        let before_div = before_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_element")
-            .unwrap();
-        let after_div = after_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_element")
-            .unwrap();
-
-        assert_ne!(before_div.content_hash, after_div.content_hash);
-        assert_eq!(before_div.structural_hash, after_div.structural_hash);
-
-        let before_fragment = before_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_fragment")
-            .unwrap();
-        let after_fragment = after_entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_fragment")
-            .unwrap();
-
-        assert_ne!(before_fragment.content_hash, after_fragment.content_hash);
-        assert_eq!(
-            before_fragment.structural_hash,
-            after_fragment.structural_hash
-        );
+            assert_ne!(before_fragment.content_hash, after_fragment.content_hash);
+            assert_eq!(
+                before_fragment.structural_hash,
+                after_fragment.structural_hash
+            );
+        }
     }
 
     #[test]
@@ -1567,8 +1364,8 @@ class="app"></div>"#;
             names
         );
         assert!(
-            names.iter().any(|name| name.starts_with("render@")),
-            "missing render tag: {:?}",
+            names.iter().any(|name| name.starts_with("p@")),
+            "missing rendered content: {:?}",
             names
         );
     }
@@ -1645,7 +1442,6 @@ class="app"></div>"#;
             .iter()
             .find(|entity| entity.entity_type == "svelte_options")
             .expect("expected svelte:options entity");
-        let metadata = options.metadata.as_ref().expect("options metadata");
 
         assert!(
             names.iter().any(|name| name.starts_with("svelte:options@")),
@@ -1653,69 +1449,14 @@ class="app"></div>"#;
             names
         );
         assert_eq!(
-            metadata.get("svelte.kind").map(String::as_str),
+            options
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("svelte.kind"))
+                .map(String::as_str),
             Some("options")
         );
-        assert_eq!(
-            metadata.get("svelte.options.namespace").map(String::as_str),
-            Some("html")
-        );
-        assert_eq!(
-            metadata.get("svelte.options.css").map(String::as_str),
-            Some("injected")
-        );
-        assert_eq!(
-            metadata
-                .get("svelte.options.customElement")
-                .map(String::as_str),
-            Some("my-custom-element")
-        );
-        assert_eq!(
-            metadata.get("svelte.options.runes").map(String::as_str),
-            Some("true")
-        );
-    }
-
-    #[test]
-    fn test_svelte_options_shorthand_boolean_metadata() {
-        let code = r#"<svelte:options immutable accessors />"#;
-        let plugin = SvelteParserPlugin;
-        let entities = plugin.extract_entities(code, "OptionsBoolean.svelte");
-
-        let options = entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_options")
-            .expect("expected svelte:options entity");
-        let metadata = options.metadata.as_ref().expect("options metadata");
-
-        assert_eq!(
-            metadata.get("svelte.options.immutable").map(String::as_str),
-            Some("true")
-        );
-        assert_eq!(
-            metadata.get("svelte.options.accessors").map(String::as_str),
-            Some("true")
-        );
-    }
-
-    #[test]
-    fn test_svelte_options_expression_attribute_metadata() {
-        let code = r#"<svelte:options customElement={{ tag: 'x-foo' }} />"#;
-        let plugin = SvelteParserPlugin;
-        let entities = plugin.extract_entities(code, "OptionsExpression.svelte");
-
-        let options = entities
-            .iter()
-            .find(|entity| entity.entity_type == "svelte_options")
-            .expect("expected svelte:options entity");
-        let metadata = options.metadata.as_ref().expect("options metadata");
-
-        assert_eq!(
-            metadata
-                .get("svelte.options.customElement")
-                .map(String::as_str),
-            Some("{ tag: 'x-foo' }")
-        );
+        assert_eq!(options.content.trim(), code.trim());
     }
 
     #[test]
@@ -2090,35 +1831,6 @@ function increment() {
     }
 
     #[test]
-    fn test_svelte_html_and_const_tags() {
-        let code = r#"{@html "<b>bold</b>"}
-{@const x = 42}
-<p>{x}</p>
-"#;
-        let plugin = SvelteParserPlugin;
-        let entities = plugin.extract_entities(code, "Tags.svelte");
-
-        let html = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_html_tag")
-            .expect("should extract @html tag");
-        assert!(html.name.starts_with("html@"));
-
-        let const_tag = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_const_tag")
-            .expect("should extract @const tag");
-        assert!(const_tag.name.starts_with("const@"));
-
-        let fragment = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_fragment")
-            .unwrap();
-        assert_eq!(html.parent_id.as_deref(), Some(fragment.id.as_str()));
-        assert_eq!(const_tag.parent_id.as_deref(), Some(fragment.id.as_str()));
-    }
-
-    #[test]
     fn test_svelte_component_with_children() {
         let code = r#"<Dialog>
   <h2>Title</h2>
@@ -2187,27 +1899,6 @@ function increment() {
     }
 
     #[test]
-    fn test_svelte_expression_tag_extraction() {
-        let code = r#"<p>{user.name}</p>
-"#;
-        let plugin = SvelteParserPlugin;
-        let entities = plugin.extract_entities(code, "Expr.svelte");
-
-        let expr = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_expression_tag")
-            .expect("should extract expression tag");
-        assert!(expr.name.starts_with("expression@"));
-
-        let p = entities.iter().find(|e| e.name.starts_with("p@")).unwrap();
-        assert_eq!(
-            expr.parent_id.as_deref(),
-            Some(p.id.as_str()),
-            "expression tag should be parented to its containing element"
-        );
-    }
-
-    #[test]
     fn test_svelte_svelte_body_and_document() {
         let code = r#"<svelte:body onscroll={() => {}} />
 <svelte:document onfullscreenchange={() => {}} />
@@ -2226,54 +1917,6 @@ function increment() {
             .find(|e| e.entity_type == "svelte_document")
             .expect("should extract svelte:document");
         assert!(doc.name.starts_with("svelte:document@"));
-    }
-
-    #[test]
-    fn test_svelte_snippet_with_render() {
-        let code = r#"{#snippet row(item)}
-  <tr><td>{item.name}</td></tr>
-{/snippet}
-
-<table>
-  {#each items as item}
-    {@render row(item)}
-  {/each}
-</table>
-"#;
-        let plugin = SvelteParserPlugin;
-        let entities = plugin.extract_entities(code, "Table.svelte");
-
-        let snippet = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_snippet")
-            .expect("should extract snippet");
-        assert!(snippet.name.starts_with("snippet@"));
-
-        let tr = entities
-            .iter()
-            .find(|e| e.name.starts_with("tr@"))
-            .expect("should extract tr inside snippet");
-        assert_eq!(
-            tr.parent_id.as_deref(),
-            Some(snippet.id.as_str()),
-            "tr should be parented to the snippet"
-        );
-
-        let render = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_render_tag")
-            .expect("should extract @render tag");
-        assert!(render.name.starts_with("render@"));
-
-        let each = entities
-            .iter()
-            .find(|e| e.entity_type == "svelte_each_block")
-            .unwrap();
-        assert_eq!(
-            render.parent_id.as_deref(),
-            Some(each.id.as_str()),
-            "@render should be parented to the each block"
-        );
     }
 
     #[test]
@@ -2430,119 +2073,11 @@ function hello() {}
                 .map(|c| (&c.entity_name, &c.entity_type))
                 .collect::<Vec<_>>()
         );
-        assert!(
-            result.changes.iter().any(
-                |c| c.entity_name == "expression@5" && c.entity_type == "svelte_expression_tag"
-            ),
-            "expected expression@5 tag: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type))
-                .collect::<Vec<_>>()
-        );
-
         for c in &result.changes {
             assert_eq!(c.commit_sha.as_deref(), Some("abc123"));
             assert_eq!(c.author.as_deref(), Some("test-author"));
             assert_eq!(c.file_path, "src/routes/+page.svelte");
         }
-    }
-
-    #[test]
-    fn test_svelte_diff_deleted_file_all_entities_deleted() {
-        let before = r#"<script>
-  let name = "world";
-</script>
-
-<h1>Hello {name}!</h1>"#;
-
-        let result = svelte_diff(Some(before), None);
-
-        assert!(result.deleted_count > 0, "expected deleted entities");
-        assert_eq!(result.added_count, 0);
-        assert_eq!(result.modified_count, 0);
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .all(|c| c.change_type == ChangeType::Deleted),
-            "all changes should be Deleted for a removed file: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "h1@5" && c.entity_type == "svelte_element"),
-            "expected h1@5 element in deleted changes: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result.changes.iter().any(
-                |c| c.entity_name == "expression@5" && c.entity_type == "svelte_expression_tag"
-            ),
-            "expected expression@5 tag in deleted changes: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_add_element() {
-        let before = r#"<div>hello</div>"#;
-        let after = r#"<div>hello</div>
-<p>new paragraph</p>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "p@2" && c.change_type == ChangeType::Added),
-            "expected p@2 element to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_remove_element() {
-        let before = r#"<div>hello</div>
-<p>paragraph</p>"#;
-        let after = r#"<div>hello</div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "p@2" && c.change_type == ChangeType::Deleted),
-            "expected p@2 element to be Deleted: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -2566,554 +2101,33 @@ function hello() {}
     }
 
     #[test]
-    fn test_svelte_diff_add_script_block() {
-        let before = r#"<div>hello</div>"#;
-        let after = r#"<script>
-  let x = 1;
-</script>
+    fn test_svelte_diff_tag_comments_are_non_structural() {
+        let before = r#"<div class="app"></div>"#;
 
-<div>hello</div>"#;
+        for after in [
+            r#"<div // Svelte 5 tag comment
+class="app"></div>"#,
+            r#"<div /* Svelte 5 tag comment */
+class="app"></div>"#,
+        ] {
+            let result = svelte_diff(Some(before), Some(after));
 
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "script"
-                && c.entity_type == "svelte_instance_script"
-                && c.change_type == ChangeType::Added),
-            "expected script to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "x"
-                && c.entity_type == "variable"
-                && c.change_type == ChangeType::Added),
-            "expected variable x to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "div@5" && c.entity_type == "svelte_element"),
-            "expected div@5 in changes: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_remove_script_block() {
-        let before = r#"<script>
-  let x = 1;
-</script>
-
-<div>hello</div>"#;
-        let after = r#"<div>hello</div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "script"
-                && c.entity_type == "svelte_instance_script"
-                && c.change_type == ChangeType::Deleted),
-            "expected script block to be Deleted: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_modify_script_logic() {
-        let before = r#"<script>
-  function greet() {
-    return "hello";
-  }
-</script>
-
-<p>{greet()}</p>"#;
-
-        let after = r#"<script>
-  function greet() {
-    return "goodbye";
-  }
-</script>
-
-<p>{greet()}</p>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "greet"
-                && c.entity_type == "function"
-                && c.change_type == ChangeType::Modified
-                && c.structural_change == Some(true)),
-            "expected greet to be Modified structurally: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (
-                    &c.entity_name,
-                    &c.entity_type,
-                    &c.change_type,
-                    &c.structural_change
-                ))
-                .collect::<Vec<_>>()
-        );
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "script"
-                && c.entity_type == "svelte_instance_script"
-                && c.change_type == ChangeType::Modified),
-            "expected script to be Modified: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-
-        assert!(
-            !result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "p@7" && c.change_type == ChangeType::Modified),
-            "p@7 should not be modified since content is identical: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_add_if_block() {
-        let before = r#"<p>always shown</p>"#;
-        let after = r#"{#if visible}
-  <p>conditionally shown</p>
-{/if}
-<p>always shown</p>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "if@1"
-                && c.entity_type == "svelte_if_block"
-                && c.change_type == ChangeType::Added),
-            "expected if@1 block to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "p@2"
-                && c.entity_type == "svelte_element"
-                && c.change_type == ChangeType::Added),
-            "expected p@2 inside if block to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_add_each_block() {
-        let before = r#"<ul></ul>"#;
-        let after = r#"<ul>
-  {#each items as item}
-    <li>{item}</li>
-  {/each}
-</ul>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "each@2"
-                && c.entity_type == "svelte_each_block"
-                && c.change_type == ChangeType::Added),
-            "expected each@2 block to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result.changes.iter().any(|c| c.entity_name == "li@3"
-                && c.entity_type == "svelte_element"
-                && c.change_type == ChangeType::Added),
-            "expected li@3 inside each to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_whitespace_only_change_is_non_structural() {
-        let before = r#"<div class="app"><span>text</span></div>"#;
-        let after = r#"<div class="app">
-  <span>text</span>
-</div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        for c in &result.changes {
-            if c.change_type == ChangeType::Modified {
-                assert_eq!(
-                    c.structural_change,
-                    Some(false),
-                    "whitespace-only change for {} should be non-structural",
-                    c.entity_name
-                );
-            }
+            assert!(
+                result.changes.iter().any(
+                    |c| c.entity_type == "svelte_element" && c.structural_change == Some(false)
+                ),
+                "expected non-structural element change: {:?}",
+                result.changes
+            );
+            assert!(
+                result
+                    .changes
+                    .iter()
+                    .any(|c| c.entity_type == "svelte_fragment"
+                        && c.structural_change == Some(false)),
+                "expected non-structural fragment change: {:?}",
+                result.changes
+            );
         }
-    }
-
-    #[test]
-    fn test_svelte_diff_identical_content_produces_no_changes() {
-        let content = r#"<script>
-  let x = 1;
-</script>
-
-<div>{x}</div>"#;
-
-        let result = svelte_diff(Some(content), Some(content));
-
-        assert!(
-            result.changes.is_empty(),
-            "identical content should produce no changes: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result.file_count, 0);
-    }
-
-    #[test]
-    fn test_svelte_diff_counts_are_consistent() {
-        let before = r#"<script>
-  let a = 1;
-</script>
-
-<div>old</div>
-<p>to remove</p>"#;
-
-        let after = r#"<script>
-  let a = 2;
-</script>
-
-<div>new</div>
-<span>added</span>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        let actual_added = result
-            .changes
-            .iter()
-            .filter(|c| c.change_type == ChangeType::Added)
-            .count();
-        let actual_modified = result
-            .changes
-            .iter()
-            .filter(|c| c.change_type == ChangeType::Modified)
-            .count();
-        let actual_deleted = result
-            .changes
-            .iter()
-            .filter(|c| c.change_type == ChangeType::Deleted)
-            .count();
-
-        assert_eq!(result.added_count, actual_added, "added_count mismatch");
-        assert_eq!(
-            result.modified_count, actual_modified,
-            "modified_count mismatch"
-        );
-        assert_eq!(
-            result.deleted_count, actual_deleted,
-            "deleted_count mismatch"
-        );
-        assert_eq!(result.file_count, 1);
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "p@6" && c.change_type == ChangeType::Deleted),
-            "expected p@6 to be Deleted: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "span@6" && c.change_type == ChangeType::Added),
-            "expected span@6 to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "div@5" && c.change_type == ChangeType::Modified),
-            "expected div@5 to be Modified: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "a" && c.change_type == ChangeType::Modified),
-            "expected variable a to be Modified: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_component_swap() {
-        let before = r#"<Button>Click</Button>"#;
-        let after = r#"<Link>Click</Link>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "Button@1" && c.change_type == ChangeType::Deleted),
-            "expected Button@1 to be Deleted: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_name == "Link@1" && c.change_type == ChangeType::Added),
-            "expected Link@1 to be Added: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_modify_options_attribute_is_structural() {
-        let before = r#"<svelte:options runes={true} namespace="html" />"#;
-        let after = r#"<svelte:options runes={false} namespace="html" />"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-        let options_change = result
-            .changes
-            .iter()
-            .find(|c| {
-                c.entity_type == "svelte_options"
-                    && c.entity_name == "svelte:options@1"
-                    && c.change_type == ChangeType::Modified
-            })
-            .expect("expected svelte:options modified change");
-
-        assert_eq!(options_change.structural_change, Some(true));
-        assert_eq!(
-            options_change.before_content.as_deref(),
-            Some(before),
-            "before_content should preserve the original options tag"
-        );
-        assert_eq!(
-            options_change.after_content.as_deref(),
-            Some(after),
-            "after_content should preserve the modified options tag"
-        );
-        assert_eq!(
-            result.added_count, 0,
-            "options change should not be treated as add"
-        );
-        assert_eq!(
-            result.deleted_count, 0,
-            "options change should not be treated as delete"
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_add_options_entity_is_added_not_modified_fragment() {
-        let before = r#"<div>hello</div>"#;
-        let after = r#"<svelte:options immutable />
-<div>hello</div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-        let options_change = result
-            .changes
-            .iter()
-            .find(|c| c.entity_type == "svelte_options")
-            .expect("expected svelte:options added change");
-
-        assert_eq!(options_change.entity_name, "svelte:options@1");
-        assert_eq!(options_change.change_type, ChangeType::Added);
-        assert_eq!(options_change.before_content, None);
-        assert_eq!(
-            options_change.after_content.as_deref(),
-            Some("<svelte:options immutable />")
-        );
-        assert!(
-            !result.changes.iter().any(|c| {
-                c.entity_type == "svelte_options" && c.change_type == ChangeType::Modified
-            }),
-            "svelte:options should be added, not modified: {:?}",
-            result
-                .changes
-                .iter()
-                .map(|c| (&c.entity_name, &c.entity_type, &c.change_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_remove_options_entity_is_deleted() {
-        let before = r#"<svelte:options immutable />
-<div>hello</div>"#;
-        let after = r#"<div>hello</div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-        let options_change = result
-            .changes
-            .iter()
-            .find(|c| c.entity_type == "svelte_options")
-            .expect("expected svelte:options deleted change");
-
-        assert_eq!(options_change.entity_name, "svelte:options@1");
-        assert_eq!(options_change.change_type, ChangeType::Deleted);
-        assert_eq!(
-            options_change.before_content.as_deref(),
-            Some("<svelte:options immutable />")
-        );
-        assert_eq!(options_change.after_content, None);
-    }
-
-    #[test]
-    fn test_svelte_diff_change_content_includes_before_and_after() {
-        let before = r#"<p>old text</p>"#;
-        let after = r#"<p>new text</p>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        let p_change = result
-            .changes
-            .iter()
-            .find(|c| {
-                c.entity_name == "p@1"
-                    && c.entity_type == "svelte_element"
-                    && c.change_type == ChangeType::Modified
-            })
-            .expect("expected p@1 to be Modified");
-
-        assert!(
-            p_change.before_content.is_some(),
-            "before_content should be set"
-        );
-        assert!(
-            p_change.after_content.is_some(),
-            "after_content should be set"
-        );
-        assert_ne!(
-            p_change.before_content, p_change.after_content,
-            "before and after should differ"
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_tag_comment_is_non_structural() {
-        let before = r#"<div class="app"></div>"#;
-        let after = r#"<div // Svelte 5 tag comment
-class="app"></div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_type == "svelte_element" && c.structural_change == Some(false)),
-            "expected element tag comment change to be non-structural: {:?}",
-            result.changes
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_type == "svelte_fragment" && c.structural_change == Some(false)),
-            "expected fragment tag comment change to be non-structural: {:?}",
-            result.changes
-        );
-    }
-
-    #[test]
-    fn test_svelte_diff_block_tag_comment_is_non_structural() {
-        let before = r#"<div class="app"></div>"#;
-        let after = r#"<div /* Svelte 5 tag comment */
-class="app"></div>"#;
-
-        let result = svelte_diff(Some(before), Some(after));
-
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_type == "svelte_element" && c.structural_change == Some(false)),
-            "expected element block comment change to be non-structural: {:?}",
-            result.changes
-        );
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.entity_type == "svelte_fragment" && c.structural_change == Some(false)),
-            "expected fragment block comment change to be non-structural: {:?}",
-            result.changes
-        );
     }
 }
