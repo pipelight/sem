@@ -221,7 +221,7 @@ fn print_json(graph: &EntityGraph, entity_filter: Option<&str>) {
         })
     };
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string(&output).unwrap());
 }
 
 fn ref_symbol(ref_type: &RefType) -> colored::ColoredString {

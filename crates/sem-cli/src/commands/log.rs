@@ -406,7 +406,7 @@ fn print_json(
         "changes": json_entries,
     });
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string(&output).unwrap());
 }
 
 enum FindResult {

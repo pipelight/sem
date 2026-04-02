@@ -140,7 +140,7 @@ pub fn blame_command(opts: BlameOptions) {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        println!("{}", serde_json::to_string(&output).unwrap());
     } else {
         println!(
             "{}",
