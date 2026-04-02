@@ -2,6 +2,7 @@ mod commands;
 mod formatters;
 
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use commands::blame::{blame_command, BlameOptions};
 use commands::diff::{diff_command, DiffOptions, OutputFormat};
 use commands::graph::{graph_command, GraphFormat, GraphOptions};
@@ -131,6 +132,10 @@ enum Commands {
         #[arg(long, short = 'v')]
         verbose: bool,
     },
+    /// Replace `git diff` with `sem diff` globally
+    Setup,
+    /// Restore default `git diff` behavior
+    Unsetup,
 }
 
 fn main() {
@@ -241,6 +246,18 @@ fn main() {
                 json,
                 verbose,
             });
+        }
+        Some(Commands::Setup) => {
+            if let Err(e) = commands::setup::run() {
+                eprintln!("{} {}", "error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Unsetup) => {
+            if let Err(e) = commands::setup::unsetup() {
+                eprintln!("{} {}", "error:".red().bold(), e);
+                std::process::exit(1);
+            }
         }
         None => {
             // Default to diff when no subcommand is given
