@@ -39,17 +39,21 @@
 
     /* Nav */
     nav {
-      padding: 20px 0;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
       position: sticky;
       top: 0;
       background: var(--bg);
       z-index: 50;
+      border-bottom: 1px solid var(--border);
     }
-    nav .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: var(--accent); }
+    nav .nav-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 20px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    nav .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: var(--accent); text-decoration: none; }
     nav .links { display: flex; gap: 20px; font-size: 13px; color: var(--dim); }
 
     /* Install box */
@@ -205,8 +209,8 @@
   </style>
 </head>
 <body>
-  <div class="container">
-    <nav>
+  <nav>
+    <div class="nav-inner">
       <div class="logo">sem</div>
       <div class="links">
         <a href="agents.html">Agents</a>
@@ -216,7 +220,9 @@
         <a href="https://github.com/Ataraxy-Labs/sem">GitHub</a>
         <a href="llms.txt">llms.txt</a>
       </div>
-    </nav>
+    </div>
+  </nav>
+  <div class="container">
 
     <!-- ═══ Act 1: Hero ═══ -->
     <div style="padding: 64px 0 40px; text-align: center;">
