@@ -2,3 +2,7 @@ target/
 .sem/
 *.db
 .DS_Store
+
+# Nixos
+.direnv/
+.envrc
